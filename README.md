@@ -1,4 +1,4 @@
-# AR Tracing Projector
+# Tracing Projector
 
 A mobile-first PWA that overlays a reference image onto your phone's camera view, so you can trace drawings onto paper without a physical projector.
 

@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-fullscreen">
+<meta name="theme-color" content="#111111">
+<title>Tracing Projector</title>
+<link rel="manifest" href="manifest.json">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root { --panel-bg: rgba(0,0,0,0.78); --border: rgba(255,255,255,0.13); --text: rgba(255,255,255,0.9); --muted: rgba(255,255,255,0.45); --hint: rgba(255,255,255,0.28); }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #111; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+
+#app {
+  position: relative;
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  background: #111;
+  touch-action: manipulation;
+}
+
+/* WebGL canvas for camera + chroma key */
+#gl-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+/* hidden video source */
+#video { display: none; }
+
+/* Reference image layer */
+#ref-wrap {
+  position: absolute;
+  z-index: 3;
+  top: 0; left: 0;
+  display: none;
+  touch-action: none;
+  cursor: grab;
+}
+#ref-wrap.active { display: block; }
+#ref-img {
+  display: block;
+  width: 100%; height: 100%;
+  transform-origin: center center;
+}
+
+/* Solid color bg layer (chroma fill) */
+#color-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: none;
+}
+#color-bg.active { display: block; }
+
+/* Corner warp handles */
+.chandle {
+  position: absolute;
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: rgba(255,200,0,0.92);
+  border: 2.5px solid #fff;
+  z-index: 10;
+  transform: translate(-50%,-50%);
+  touch-action: none;
+  cursor: grab;
+  display: none;
+}
+.chandle.on { display: block; }
+
+/* ── Panel ── */
+#panel {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  z-index: 20;
+  background: var(--panel-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 0.5px solid var(--border);
+  transition: transform 0.25s ease;
+}
+#panel.collapsed { transform: translateY(calc(100% - 52px)); }
+
+.ptoggle {
+  width: 100%;
+  display: flex; align-items: center; justify-content: center;
+  padding: 14px; gap: 8px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 15px;
+  user-select: none;
+}
+.ptoggle i { transition: transform 0.25s; }
+#panel.collapsed .ptoggle i { transform: rotate(180deg); }
+
+.pbody {
+  display: flex; flex-direction: column;
+  gap: 14px;
+  padding: 2px 18px 32px;
+  max-height: 65dvh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Sections */
+.sec {
+  font-size: 11px;
+  color: var(--hint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: -6px;
+}
+
+/* Rows */
+.row {
+  display: flex; align-items: center; gap: 12px;
+}
+.row label {
+  font-size: 15px;
+  color: var(--muted);
+  min-width: 64px;
+}
+.row input[type=range] {
+  flex: 1;
+  accent-color: #fff;
+  height: 4px;
+}
+.val {
+  font-size: 15px;
+  color: var(--text);
+  min-width: 44px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Button rows */
+.brow { display: flex; gap: 10px; }
+.btn {
+  flex: 1;
+  padding: 13px 6px;
+  border-radius: 10px;
+  border: 0.5px solid rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.08);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  gap: 7px;
+  line-height: 1.2;
+  text-align: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn:active { background: rgba(255,255,255,0.2); transform: scale(0.97); }
+.btn.primary { background: rgba(255,255,255,0.92); color: #000; border-color: transparent; }
+.btn.amber { background: rgba(255,200,0,0.12); border-color: rgba(255,200,0,0.45); color: #ffc800; }
+.btn.green { background: rgba(80,210,120,0.12); border-color: rgba(80,210,120,0.45); color: #50d278; }
+.btn.green.done { opacity: 0.55; }
+.btn.active { background: rgba(255,200,0,0.18); border-color: rgba(255,200,0,0.6); color: #ffc800; }
+.btn.disabled { opacity: 0.35; pointer-events: none; }
+
+/* URL row */
+.url-row { display: flex; gap: 8px; }
+.url-row input {
+  flex: 1;
+  background: rgba(255,255,255,0.08);
+  border: 0.5px solid rgba(255,255,255,0.18);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 15px;
+  padding: 11px 13px;
+  outline: none;
+  -webkit-appearance: none;
+}
+.url-row input::placeholder { color: var(--hint); }
+.url-row button {
+  padding: 11px 16px;
+  border-radius: 10px;
+  border: 0.5px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.08);
+  color: var(--text);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+/* Sensor bar */
+.sensor-bar {
+  display: flex; align-items: flex-start; gap: 10px;
+  background: rgba(255,200,0,0.07);
+  border: 0.5px solid rgba(255,200,0,0.28);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.sdot {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: rgba(255,200,0,0.35);
+  flex-shrink: 0;
+  margin-top: 4px;
+  transition: background 0.3s, box-shadow 0.3s;
+}
+.sdot.live { background: #ffc800; box-shadow: 0 0 0 3px rgba(255,200,0,0.22); }
+#sensor-msg { flex: 1; font-size: 13px; color: rgba(255,200,0,0.85); line-height: 1.5; }
+
+/* Chroma key bar */
+.chroma-bar {
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(120,200,255,0.07);
+  border: 0.5px solid rgba(120,200,255,0.25);
+  border-radius: 10px;
+  padding: 11px 14px;
+}
+#chroma-preview {
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  border: 1.5px solid rgba(255,255,255,0.25);
+  flex-shrink: 0;
+  background: #888;
+}
+#chroma-msg { flex: 1; font-size: 13px; color: rgba(120,200,255,0.85); line-height: 1.4; }
+
+/* Top badges */
+.tbadge {
+  position: absolute;
+  top: 14px;
+  z-index: 9;
+  background: rgba(0,0,0,0.52);
+  border: 0.5px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  color: rgba(255,255,255,0.65);
+  font-size: 14px;
+  padding: 8px 13px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+#badge-cam  { left: 14px; }
+#badge-full { left: 98px; }
+#badge-fh   { right: 90px; }
+#badge-fv   { right: 14px; }
+
+#cam-status {
+  position: absolute;
+  top: 40%; left: 50%;
+  transform: translate(-50%,-50%);
+  z-index: 5;
+  color: var(--muted);
+  font-size: 16px;
+  text-align: center;
+  pointer-events: none;
+  line-height: 1.8;
+}
+#hint {
+  position: absolute;
+  top: 14px; left: 0; right: 0;
+  z-index: 8;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  pointer-events: none;
+  transition: opacity 0.5s;
+}
+
+/* Layer order indicator */
+#layer-indicator {
+  position: absolute;
+  bottom: 60px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 9;
+  background: rgba(0,0,0,0.52);
+  border: 0.5px solid rgba(255,255,255,0.15);
+  border-radius: 20px;
+  color: rgba(255,255,255,0.55);
+  font-size: 12px;
+  padding: 6px 14px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.4s;
+  white-space: nowrap;
+}
+
+/* Chroma pick cursor */
+body.picking { cursor: crosshair !important; }
+body.picking #gl-canvas { cursor: crosshair; }
+
+input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="gl-canvas"></canvas>
+  <video id="video" autoplay playsinline muted></video>
+  <div id="color-bg"></div>
+
+  <div id="ref-wrap">
+    <img id="ref-img" draggable="false" crossorigin="anonymous" />
+  </div>
+
+  <div class="chandle" id="h-tl"></div>
+  <div class="chandle" id="h-tr"></div>
+  <div class="chandle" id="h-bl"></div>
+  <div class="chandle" id="h-br"></div>
+
+  <div id="cam-status">Tap "Camera" to begin</div>
+  <div id="hint" style="opacity:0">Pinch to scale & rotate · Drag to move</div>
+  <div id="layer-indicator">cam on top</div>
+
+  <div class="tbadge" id="badge-cam">📷 Camera</div>
+  <div class="tbadge" id="badge-full">⛶ Full</div>
+  <div class="tbadge" id="badge-fh">↔ H</div>
+  <div class="tbadge" id="badge-fv">↕ V</div>
+
+  <div id="panel">
+    <div class="ptoggle" id="ptoggle">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" id="toggle-chevron">
+        <path d="M4 6l5 5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <span id="toggle-label">Hide panel</span>
+    </div>
+    <div class="pbody" id="pbody">
+
+      <div class="brow">
+        <button class="btn primary" id="btn-cam">📷 Start camera</button>
+        <button class="btn" id="btn-upload">🖼 Local image</button>
+        <input type="file" id="file-input" accept="image/*">
+      </div>
+
+      <div class="sec">Load from URL</div>
+      <div class="url-row">
+        <input id="url-input" type="url" placeholder="Paste image URL…" />
+        <button id="url-go">Load</button>
+      </div>
+
+      <div class="sec">Reference image</div>
+      <div class="row">
+        <label>Opacity</label>
+        <input type="range" id="sl-op" min="5" max="95" value="50" step="1">
+        <span class="val" id="v-op">50%</span>
+      </div>
+      <div class="row">
+        <label>Scale</label>
+        <input type="range" id="sl-sc" min="20" max="300" value="100" step="1">
+        <span class="val" id="v-sc">100%</span>
+      </div>
+      <div class="row">
+        <label>Rotate</label>
+        <input type="range" id="sl-ro" min="−180" max="180" value="0" step="1">
+        <span class="val" id="v-ro">0°</span>
+      </div>
+      <div class="brow">
+        <button class="btn" id="btn-layer">⇅ Swap layers</button>
+        <button class="btn" id="btn-edge">◑ Edge enhance</button>
+      </div>
+
+      <div class="sec">Perspective</div>
+      <div class="sensor-bar">
+        <div class="sdot" id="sdot"></div>
+        <div id="sensor-msg">Tap ① to calibrate with sensor</div>
+      </div>
+      <div class="brow">
+        <button class="btn amber" id="btn-cal">① Lay flat & calibrate</button>
+      </div>
+      <div class="brow">
+        <button class="btn green disabled" id="btn-cap">② Prop up & capture</button>
+      </div>
+      <div class="row">
+        <label>Tilt X</label>
+        <input type="range" id="sl-px" min="-70" max="70" value="0" step="1">
+        <span class="val" id="v-px">0°</span>
+      </div>
+      <div class="row">
+        <label>Tilt Y</label>
+        <input type="range" id="sl-py" min="-70" max="70" value="0" step="1">
+        <span class="val" id="v-py">0°</span>
+      </div>
+      <div class="brow">
+        <button class="btn" id="btn-warp">⬡ 4-corner warp</button>
+        <button class="btn" id="btn-rpersp">↺ Reset persp.</button>
+      </div>
+
+      <div class="sec">Chroma key (paper color)</div>
+      <div class="chroma-bar">
+        <div id="chroma-preview"></div>
+        <div id="chroma-msg">Tap "Pick color" then tap the paper in camera view</div>
+      </div>
+      <div class="brow">
+        <button class="btn" id="btn-pick">🎯 Pick color</button>
+        <button class="btn" id="btn-chroma-off">✕ Disable</button>
+      </div>
+      <div class="row">
+        <label>Tolerance</label>
+        <input type="range" id="sl-tol" min="0" max="120" value="40" step="1">
+        <span class="val" id="v-tol">40</span>
+      </div>
+      <div class="row">
+        <label>Feather</label>
+        <input type="range" id="sl-fea" min="0" max="60" value="15" step="1">
+        <span class="val" id="v-fea">15</span>
+      </div>
+
+      <div class="brow">
+        <button class="btn" id="btn-reset">↺ Reset position</button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+let imgTop = true;
+// ── State ──────────────────────────────────────────────
+const st = {
+  x:0, y:0, w:200, h:200,
+  scale:1, rotate:0,
+  opacity:0.5, mx:1, my:1,
+  px:0, py:0,
+  camOnTop: true,
+  edgeMode: false,
+  chromaEnabled: false,
+  chromaR:128, chromaG:128, chromaB:128,
+  tolerance:40, feather:15,
+  warpMode: false,
+};
+
+// ── Elements ───────────────────────────────────────────
+const glCanvas  = document.getElementById('gl-canvas');
+const video     = document.getElementById('video');
+const refWrap   = document.getElementById('ref-wrap');
+const refImg    = document.getElementById('ref-img');
+const colorBg   = document.getElementById('color-bg');
+const app       = document.getElementById('app');
+const panel     = document.getElementById('panel');
+const pbody     = document.getElementById('pbody');
+const layerInd  = document.getElementById('layer-indicator');
+
+const corners = {
+  tl: document.getElementById('h-tl'),
+  tr: document.getElementById('h-tr'),
+  bl: document.getElementById('h-bl'),
+  br: document.getElementById('h-br'),
+};
+let warpPts = { tl:[0,0], tr:[0,0], bl:[0,0], br:[0,0] };
+
+// ── WebGL setup ────────────────────────────────────────
+let gl, prog, texLoc, uKey, uTol, uFea, uChroma, uEdge;
+let videoTex = null;
+let rafId = null;
+let camStream = null;
+
+const VS = `
+attribute vec2 aPos;
+varying vec2 vUV;
+void main(){
+  vUV = vec2(aPos.x * 0.5 + 0.5, 0.5 - aPos.y * 0.5);
+  gl_Position = vec4(aPos, 0.0, 1.0);
+}`;
+
+const FS = `
+precision mediump float;
+varying vec2 vUV;
+uniform sampler2D uTex;
+uniform vec3 uKeyColor;
+uniform float uTolerance;
+uniform float uFeather;
+uniform bool uChromaOn;
+uniform bool uEdgeOn;
+
+void main(){
+  vec2 uv = vUV;
+  vec4 c = texture2D(uTex, uv);
+
+  if(uEdgeOn){
+    // simple luminance edge via neighbor sampling — approximate, no extra textures needed
+    float s = 0.002;
+    float l  = dot(texture2D(uTex, uv).rgb, vec3(0.299,0.587,0.114));
+    float lx = dot(texture2D(uTex, uv+vec2(s,0.0)).rgb, vec3(0.299,0.587,0.114));
+    float ly = dot(texture2D(uTex, uv+vec2(0.0,s)).rgb, vec3(0.299,0.587,0.114));
+    float edge = length(vec2(l-lx, l-ly)) * 18.0;
+    edge = clamp(edge, 0.0, 1.0);
+    // blend: darken toward edge, lighten flat areas
+    c.rgb = mix(c.rgb, vec3(0.0), edge * 0.85);
+    c.rgb = mix(c.rgb, vec3(1.0), (1.0 - edge) * 0.25);
+  }
+
+  if(uChromaOn){
+    float dist = distance(c.rgb, uKeyColor);
+    float alpha = smoothstep(uTolerance, uTolerance + uFeather, dist);
+    gl_FragColor = vec4(c.rgb, alpha);
+  } else {
+    gl_FragColor = c;
+  }
+}`;
+
+function initGL() {
+  gl = glCanvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });
+  if (!gl) return false;
+
+  function compileShader(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    return s;
+  }
+  prog = gl.createProgram();
+  gl.attachShader(prog, compileShader(gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const aPos = gl.getAttribLocation(prog, 'aPos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  texLoc  = gl.getUniformLocation(prog, 'uTex');
+  uKey    = gl.getUniformLocation(prog, 'uKeyColor');
+  uTol    = gl.getUniformLocation(prog, 'uTolerance');
+  uFea    = gl.getUniformLocation(prog, 'uFeather');
+  uChroma = gl.getUniformLocation(prog, 'uChromaOn');
+  uEdge   = gl.getUniformLocation(prog, 'uEdgeOn');
+
+  videoTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, videoTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+  return true;
+}
+
+function resizeGL() {
+  glCanvas.width  = app.clientWidth;
+  glCanvas.height = app.clientHeight;
+  if (gl) gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+}
+
+function renderFrame() {
+  rafId = requestAnimationFrame(renderFrame);
+  if (!gl || !camStream || video.readyState < 2) return;
+
+  resizeIfNeeded();
+
+  gl.bindTexture(gl.TEXTURE_2D, videoTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+
+  gl.uniform1i(texLoc, 0);
+  gl.uniform3f(uKey, st.chromaR/255, st.chromaG/255, st.chromaB/255);
+  gl.uniform1f(uTol, st.tolerance/255);
+  gl.uniform1f(uFea, st.feather/255);
+  gl.uniform1i(uChroma, st.chromaEnabled ? 1 : 0);
+  gl.uniform1i(uEdge, st.edgeMode ? 1 : 0);
+
+  gl.clearColor(0,0,0,0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+let lastW = 0, lastH = 0;
+function resizeIfNeeded() {
+  const w = app.clientWidth, h = app.clientHeight;
+  if (w !== lastW || h !== lastH) { lastW=w; lastH=h; resizeGL(); }
+}
+
+// ── Camera ─────────────────────────────────────────────
+let camDevices = [];
+let camIdx = 0;
+
+async function getCamDevices() {
+  try {
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    camDevices = devs.filter(d => d.kind === 'videoinput');
+  } catch(e) {}
+}
+
+async function startCamera(deviceId) {
+  if (camStream) { camStream.getTracks().forEach(t => t.stop()); }
+  const constraints = {
+    video: deviceId
+      ? { deviceId: { exact: deviceId }, width:{ideal:1280}, height:{ideal:720} }
+      : { facingMode: 'environment', width:{ideal:1280}, height:{ideal:720} },
+    audio: false
+  };
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = camStream;
+    await video.play();
+    document.getElementById('cam-status').style.display = 'none';
+
+    // try lock focus
+    const track = camStream.getVideoTracks()[0];
+    try {
+      await track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: 0.3 }] });
+    } catch(e) {}
+
+    if (!rafId) renderFrame();
+    await getCamDevices();
+    document.getElementById('btn-cam').textContent = camDevices.length > 1 ? '🔄 Switch cam' : '📷 Camera on';
+    document.getElementById('btn-cam').classList.remove('primary');
+    return true;
+  } catch(e) {
+    alert('Camera access denied or unavailable.');
+    return false;
+  }
+}
+
+document.getElementById('btn-cam').addEventListener('click', async () => {
+  if (!camStream) {
+    await startCamera(null);
+  } else if (camDevices.length > 1) {
+    camIdx = (camIdx + 1) % camDevices.length;
+    await startCamera(camDevices[camIdx].deviceId);
+  }
+});
+
+// ── WakeLock ───────────────────────────────────────────
+let wakeLock = null;
+async function acquireWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch(e) {}
+}
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && camStream) acquireWakeLock();
+});
+
+// ── Fullscreen ─────────────────────────────────────────
+document.getElementById('badge-full').addEventListener('click', () => {
+  if (!document.fullscreenElement) {
+    app.requestFullscreen?.() || app.webkitRequestFullscreen?.();
+  } else {
+    document.exitFullscreen?.() || document.webkitExitFullscreen?.();
+  }
+});
+
+// ── Image loading ──────────────────────────────────────
+function loadImage(src) {
+  refImg.onload = () => {
+    refWrap.classList.add('active');
+    resetPos();
+    showHint('Pinch to scale & rotate · Drag to move');
+  };
+  refImg.onerror = () => alert('Failed to load image.');
+  refImg.src = src;
+}
+
+document.getElementById('btn-upload').addEventListener('click', () => document.getElementById('file-input').click());
+document.getElementById('file-input').addEventListener('change', e => {
+  const f = e.target.files[0]; if (f) loadImage(URL.createObjectURL(f));
+});
+document.getElementById('url-go').addEventListener('click', () => {
+  const u = document.getElementById('url-input').value.trim();
+  if (u) loadImage(u);
+});
+document.getElementById('url-input').addEventListener('keydown', e => { if (e.key==='Enter') document.getElementById('url-go').click(); });
+document.addEventListener('paste', e => {
+  for (const item of (e.clipboardData?.items||[])) {
+    if (item.type.startsWith('image/')) { loadImage(URL.createObjectURL(item.getAsFile())); return; }
+  }
+});
+app.addEventListener('dragover', e => e.preventDefault());
+app.addEventListener('drop', e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (f?.type.startsWith('image/')) loadImage(URL.createObjectURL(f));
+});
+
+// ── Transform ─────────────────────────────────────────
+function applyAll() {
+  refWrap.style.left   = st.x + 'px';
+  refWrap.style.top    = st.y + 'px';
+  refWrap.style.width  = st.w + 'px';
+  refWrap.style.height = st.h + 'px';
+  refWrap.style.transform = `rotate(${st.rotate}deg) scale(${st.scale})`;
+  
+  refImg.style.transform = `perspective(900px) rotateX(${st.py}deg) rotateY(${st.px}deg) scale(${st.mx},${st.my})`;
+
+  // layer order
+  if (st.camOnTop) {
+    glCanvas.style.zIndex = 4;
+    refWrap.style.zIndex  = 3;
+    colorBg.style.zIndex  = 0;
+glCanvas.style.opacity = st.opacity;
+refImg.style.opacity = 1;
+  } else {
+    glCanvas.style.zIndex = 2;
+    refWrap.style.zIndex  = 3;
+    colorBg.style.zIndex  = 0;
+glCanvas.style.opacity = 1;
+refImg.style.opacity = st.opacity;
+  }
+}
+
+function resetPos() {
+  const panH = panel.getBoundingClientRect().height;
+  const aw = app.clientWidth, ah = app.clientHeight;
+  st.w = refImg.naturalWidth  || 240;
+  st.h = refImg.naturalHeight || 240;
+  const maxW = aw * 0.85;
+  if (st.w > maxW) { st.h = st.h * maxW / st.w; st.w = maxW; }
+  st.x = (aw - st.w) / 2;
+  st.y = (ah - panH - st.h) / 2;
+  st.scale = 1; st.rotate = 0;
+  sl('sl-sc', 100); sl('sl-ro', 0);
+  applyAll(); updateHandles();
+}
+
+function resetPersp() {
+  st.px=0; st.py=0;
+  sl('sl-px',0); sl('sl-py',0);
+  applyAll();
+}
+
+function sl(id, val) {
+  const el = document.getElementById(id);
+  el.value = val;
+  el.dispatchEvent(new Event('input'));
+}
+
+// ── Sliders ────────────────────────────────────────────
+[
+  ['sl-op','v-op','%', v => { st.opacity = v/100; applyAll(); }],
+  ['sl-sc','v-sc','%', v => { st.scale = v/100; applyAll(); updateHandles(); }],
+  ['sl-ro','v-ro','°', v => { st.rotate = v; applyAll(); updateHandles(); }],
+  ['sl-px','v-px','°', v => { st.px = v; applyAll(); }],
+  ['sl-py','v-py','°', v => { st.py = v; applyAll(); }],
+  ['sl-tol','v-tol','', v => { st.tolerance = v; }],
+  ['sl-fea','v-fea','', v => { st.feather = v; }],
+].forEach(([id,vid,unit,fn]) => {
+  document.getElementById(id).addEventListener('input', function() {
+    document.getElementById(vid).textContent = this.value + unit;
+    fn(parseFloat(this.value));
+  });
+});
+
+// ── Layer swap ─────────────────────────────────────────
+document.getElementById('btn-layer').addEventListener('click', () => {
+  st.camOnTop = !st.camOnTop;
+  applyAll();
+  const msg = st.camOnTop ? 'cam on top' : 'ref on top';
+  layerInd.textContent = msg;
+  layerInd.style.opacity = '1';
+  setTimeout(() => { layerInd.style.opacity = '0'; }, 1800);
+  document.getElementById('btn-layer').textContent = st.camOnTop ? '⇅ Swap layers' : '⇅ Swap back';
+});
+
+// ── Edge enhance ───────────────────────────────────────
+document.getElementById('btn-edge').addEventListener('click', () => {
+  st.edgeMode = !st.edgeMode;
+  document.getElementById('btn-edge').classList.toggle('active', st.edgeMode);
+  document.getElementById('btn-edge').textContent = st.edgeMode ? '◑ Edge: ON' : '◑ Edge enhance';
+});
+
+// ── Flip ───────────────────────────────────────────────
+document.getElementById('badge-fh').addEventListener('click', () => { st.mx *= -1; applyAll(); });
+document.getElementById('badge-fv').addEventListener('click', () => { st.my *= -1; applyAll(); });
+
+// ── Reset ──────────────────────────────────────────────
+document.getElementById('btn-reset').addEventListener('click', resetPos);
+document.getElementById('btn-rpersp').addEventListener('click', resetPersp);
+
+// ── Panel toggle ───────────────────────────────────────
+document.getElementById('ptoggle').addEventListener('click', () => {
+  panel.classList.toggle('collapsed');
+  const c = panel.classList.contains('collapsed');
+  document.getElementById('toggle-label').textContent = c ? 'Show panel' : 'Hide panel';
+});
+
+// ── Sensor ─────────────────────────────────────────────
+let baseBeta=null, baseGamma=null, sensorListener=null;
+const sdot = document.getElementById('sdot');
+const sensorMsg = document.getElementById('sensor-msg');
+
+async function reqSensor() {
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    try { return (await DeviceOrientationEvent.requestPermission()) === 'granted'; } catch(e) { return false; }
+  }
+  return true;
+}
+function stopSensor() {
+  if (sensorListener) { window.removeEventListener('deviceorientation', sensorListener); sensorListener=null; }
+  sdot.classList.remove('live');
+}
+function startSensor(cb) {
+  stopSensor();
+  sensorListener = cb;
+  window.addEventListener('deviceorientation', sensorListener);
+  sdot.classList.add('live');
+}
+
+document.getElementById('btn-cal').addEventListener('click', async () => {
+  if (!await reqSensor()) { sensorMsg.textContent='Sensor permission denied'; return; }
+  sensorMsg.textContent = 'Listening… lay phone flat';
+  startSensor(e => {
+    if (e.beta===null) { sensorMsg.textContent='Sensor unavailable'; stopSensor(); return; }
+    baseBeta=e.beta; baseGamma=e.gamma;
+    stopSensor();
+    sensorMsg.textContent = `✓ Flat saved (β${Math.round(baseBeta)}° γ${Math.round(baseGamma)}°) — now prop up & tap ②`;
+    document.getElementById('btn-cap').classList.remove('disabled');
+  });
+});
+
+document.getElementById('btn-cap').addEventListener('click', async () => {
+  if (baseBeta===null) return;
+  if (!await reqSensor()) return;
+  sensorMsg.textContent = 'Hold steady…';
+  startSensor(e => {
+    if (e.beta===null) return;
+    const dx = Math.max(-70, Math.min(70, Math.round(e.gamma - baseGamma)));
+    const dy = Math.max(-70, Math.min(70, Math.round(e.beta  - baseBeta)));
+    stopSensor();
+    sl('sl-px', dx); sl('sl-py', dy);
+    sensorMsg.textContent = `✓ Tilt X: ${dx}°, Tilt Y: ${dy}°`;
+    baseBeta=e.beta; baseGamma=e.gamma; // ready for re-capture
+  });
+});
+
+// ── Chroma key ─────────────────────────────────────────
+let pickMode = false;
+const chromaPreview = document.getElementById('chroma-preview');
+const chromaMsg = document.getElementById('chroma-msg');
+
+function setChromaColor(r,g,b) {
+  st.chromaR=r; st.chromaG=g; st.chromaB=b;
+  const hex = '#' + [r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
+  chromaPreview.style.background = hex;
+  colorBg.style.background = hex;
+  colorBg.classList.add('active');
+  st.chromaEnabled = true;
+  chromaMsg.textContent = `Key color: ${hex} — adjust tolerance & feather`;
+}
+
+document.getElementById('btn-pick').addEventListener('click', () => {
+  if (!camStream) { chromaMsg.textContent = 'Start camera first'; return; }
+  pickMode = true;
+  document.body.classList.add('picking');
+  chromaMsg.textContent = 'Tap on the paper in the camera view…';
+});
+
+document.getElementById('btn-chroma-off').addEventListener('click', () => {
+  st.chromaEnabled = false;
+  colorBg.classList.remove('active');
+  chromaMsg.textContent = 'Chroma key disabled';
+});
+
+// Sample color from current video frame via a tiny offscreen canvas
+function sampleGLColor(clientX, clientY) {
+  const rect = glCanvas.getBoundingClientRect();
+  const x = Math.round((clientX - rect.left) * glCanvas.width / rect.width);
+  const y = Math.round(glCanvas.height - (clientY - rect.top) * glCanvas.height / rect.height);
+  
+  // 读取 5×5 区域求平均
+  const r = 5, size = r*2+1;
+  const buf = new Uint8Array(size * size * 4);
+  gl.readPixels(x-r, y-r, size, size, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+  
+  let rSum=0, gSum=0, bSum=0, count=0;
+  for (let i=0; i<buf.length; i+=4) {
+    if (buf[i+3] > 0) { rSum+=buf[i]; gSum+=buf[i+1]; bSum+=buf[i+2]; count++; }
+  }
+  return count > 0 ? [rSum/count, gSum/count, bSum/count] : [128,128,128];
+}
+
+
+glCanvas.addEventListener('click', e => {
+  if (!pickMode) return;
+  const [r,g,b] = sampleGLColor(e.clientX, e.clientY);
+  setChromaColor(r,g,b);
+  pickMode = false;
+  document.body.classList.remove('picking');
+});
+glCanvas.addEventListener('touchend', e => {
+  if (!pickMode) return;
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  const [r,g,b] = sampleGLColor(t.clientX, t.clientY);
+  setChromaColor(r,g,b);
+  pickMode = false;
+  document.body.classList.remove('picking');
+}, { passive:false });
+
+// ── Warp ───────────────────────────────────────────────
+function updateHandles() {
+  if (!st.warpMode) return;
+  const cx = st.x + st.w/2, cy = st.y + st.h/2;
+  const rad = st.rotate * Math.PI/180, sc = st.scale;
+  const hw = st.w/2, hh = st.h/2;
+  function rp(ox,oy){ return [cx+(ox*Math.cos(rad)-oy*Math.sin(rad))*sc, cy+(ox*Math.sin(rad)+oy*Math.cos(rad))*sc]; }
+  for (const [k,ox,oy] of [['tl',-hw,-hh],['tr',hw,-hh],['bl',-hw,hh],['br',hw,hh]]) {
+    const p=rp(ox,oy); warpPts[k]=p;
+    corners[k].style.left=p[0]+'px'; corners[k].style.top=p[1]+'px';
+  }
+}
+
+function enableWarp(on) {
+  st.warpMode=on;
+  const btn=document.getElementById('btn-warp');
+  Object.values(corners).forEach(c=>c.classList.toggle('on',on));
+  btn.classList.toggle('active',on);
+  btn.textContent = on ? '✓ Warp active' : '⬡ 4-corner warp';
+  if (on) updateHandles();
+}
+document.getElementById('btn-warp').addEventListener('click',()=>enableWarp(!st.warpMode));
+
+function applyWarpMatrix() {
+  const w=st.w*st.scale, h=st.h*st.scale;
+  const {tl,tr,bl,br}=warpPts;
+  const mat=homography([0,0,w,0,0,h,w,h],[...tl,...tr,...bl,...br]);
+  if(mat) refWrap.style.transform=`matrix3d(${mat})`;
+}
+function homography(src,dst){
+  const [x1,y1,x2,y2,x3,y3,x4,y4]=src, [X1,Y1,X2,Y2,X3,Y3,X4,Y4]=dst;
+  const A=[[-x1,-y1,-1,0,0,0,X1*x1,X1*y1,X1],[0,0,0,-x1,-y1,-1,Y1*x1,Y1*y1,Y1],[-x2,-y2,-1,0,0,0,X2*x2,X2*y2,X2],[0,0,0,-x2,-y2,-1,Y2*x2,Y2*y2,Y2],[-x3,-y3,-1,0,0,0,X3*x3,X3*y3,X3],[0,0,0,-x3,-y3,-1,Y3*x3,Y3*y3,Y3],[-x4,-y4,-1,0,0,0,X4*x4,X4*y4,X4],[0,0,0,-x4,-y4,-1,Y4*x4,Y4*y4,Y4]];
+  const b=[X1,Y1,X2,Y2,X3,Y3,X4,Y4];
+  const h=gaussSolve(A,b); if(!h)return null; h.push(1);
+  return [h[0],h[3],0,h[6],h[1],h[4],0,h[7],0,0,1,0,h[2],h[5],0,1];
+}
+function gaussSolve(A,b){
+  const n=8,M=A.map((r,i)=>[...r,b[i]]);
+  for(let c=0;c<n;c++){
+    let mx=c; for(let r=c+1;r<n;r++)if(Math.abs(M[r][c])>Math.abs(M[mx][c]))mx=r;
+    [M[c],M[mx]]=[M[mx],M[c]];
+    if(Math.abs(M[c][c])<1e-10)return null;
+    for(let r=0;r<n;r++){if(r===c)continue;const f=M[r][c]/M[c][c];for(let j=c;j<=n;j++)M[r][j]-=f*M[c][j];}
+  }
+  return M.map((r,i)=>r[n]/r[i]);
+}
+
+// ── Touch / Mouse interaction ──────────────────────────
+let drag={active:false,sx:0,sy:0};
+let pinch={active:false,sd:0,ss:1,sa:0,sr:0};
+let cdrag={active:false,key:null};
+
+function tdist(t){const dx=t[0].clientX-t[1].clientX,dy=t[0].clientY-t[1].clientY;return Math.sqrt(dx*dx+dy*dy);}
+function tang(t){return Math.atan2(t[1].clientY-t[0].clientY,t[1].clientX-t[0].clientX)*180/Math.PI;}
+function hitCorner(x,y){for(const k of['tl','tr','bl','br']){const p=warpPts[k];if(Math.abs(x-p[0])<26&&Math.abs(y-p[1])<26)return k;}return null;}
+
+refWrap.addEventListener('touchstart',e=>{
+  if(st.warpMode||pickMode)return;
+  e.preventDefault();
+  if(e.touches.length===1){drag.active=true;drag.sx=e.touches[0].clientX-st.x;drag.sy=e.touches[0].clientY-st.y;}
+  else if(e.touches.length===2){drag.active=false;pinch.active=true;pinch.sd=tdist(e.touches);pinch.ss=st.scale;pinch.sa=tang(e.touches);pinch.sr=st.rotate;}
+},{passive:false});
+
+app.addEventListener('touchstart',e=>{
+  if(st.warpMode&&e.touches.length===1){
+    const k=hitCorner(e.touches[0].clientX,e.touches[0].clientY);
+    if(k){e.preventDefault();cdrag.active=true;cdrag.key=k;}
+  }
+},{passive:false});
+
+document.addEventListener('touchmove',e=>{
+  if(cdrag.active&&e.touches.length===1){
+    e.preventDefault();
+    const t=e.touches[0],k=cdrag.key;
+    corners[k].style.left=t.clientX+'px';corners[k].style.top=t.clientY+'px';
+    warpPts[k]=[t.clientX,t.clientY];
+    applyWarpMatrix();
+  }else if(drag.active&&e.touches.length===1){
+    e.preventDefault();
+    st.x=e.touches[0].clientX-drag.sx;st.y=e.touches[0].clientY-drag.sy;
+    applyAll();updateHandles();
+  }else if(pinch.active&&e.touches.length===2){
+    e.preventDefault();
+    st.scale=Math.max(0.1,Math.min(6,pinch.ss*tdist(e.touches)/pinch.sd));
+    st.rotate=pinch.sr+(tang(e.touches)-pinch.sa);
+    sl('sl-sc',Math.round(st.scale*100));
+    sl('sl-ro',Math.round(st.rotate));
+    applyAll();updateHandles();
+  }
+},{passive:false});
+
+document.addEventListener('touchend',()=>{drag.active=false;pinch.active=false;cdrag.active=false;});
+
+let md={active:false};
+refWrap.addEventListener('mousedown',e=>{if(st.warpMode||pickMode)return;md.active=true;drag.sx=e.clientX-st.x;drag.sy=e.clientY-st.y;refWrap.style.cursor='grabbing';});
+document.addEventListener('mousemove',e=>{if(!md.active)return;st.x=e.clientX-drag.sx;st.y=e.clientY-drag.sy;applyAll();updateHandles();});
+document.addEventListener('mouseup',()=>{md.active=false;refWrap.style.cursor='grab';});
+
+// ── Hint helper ────────────────────────────────────────
+function showHint(msg) {
+  const h = document.getElementById('hint');
+  h.textContent = msg;
+  h.style.opacity = '1';
+  setTimeout(()=>{ h.style.opacity='0'; }, 3000);
+}
+
+// ── Init ───────────────────────────────────────────────
+window.addEventListener('resize', resizeIfNeeded);
+initGL();
+resizeGL();
+acquireWakeLock();
+</script>
+
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
